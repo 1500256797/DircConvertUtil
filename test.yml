@@ -1,0 +1,11 @@
+zzq: # 这是域
+  popu_type: "10101"
+  popuType: "10101"
+  sex: "10102"
+  religion :  "10107"
+jack: # 这是域
+  popu_type: "10101" # 翻译Map数据中的字段
+  popuType: "10101"  #翻译实体中的字段
+  sex: "10102"
+  marital_status : "10104"
+  religion :  "10107"
