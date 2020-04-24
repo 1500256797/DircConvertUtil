@@ -61,18 +61,7 @@ public class DircConvertUtils {
 
     private static  List<TbDirc> tbDircList ;
 
-    private static List<Map<String, Object>> selectDicInfoByType(String type) {
-        log.error("正在找"+type+"类型对应的kv..........");
-        List<Map<String, Object>> mapList = new ArrayList<>();
-        tbDircList.stream().filter(tbDirc -> tbDirc.getFType().equals(type))
-                .forEach(tbDirc -> {
-                    HashMap<String, Object> hashMapTemp = new HashMap<>();
-                    hashMapTemp.put(KEY_NAME,tbDirc.getFKey());
-                    hashMapTemp.put(VALUE_NAME, tbDirc.getFValue());
-                    mapList.add(hashMapTemp);
-                });
-        return mapList;
-    }
+
     @PostConstruct
     public  void init(){
         tbDircMapper = tbDircMapper_temp;
@@ -266,6 +255,25 @@ public class DircConvertUtils {
         }
         return false;
     }
+    /**
+     * 递归翻译
+     * @param _value 当前数据中的子集
+     * @return 是否发生递归动作
+     * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
+     * @param scope 是否添加域
+     */
+    private static boolean recursion(Object _value,boolean ifOverturn,String scope) {
+        if (_value == null) return true;
+        if (_value instanceof Map) {
+            convertDicColumnInfo4Map((Map) _value,ifOverturn,scope);
+            return true;
+        } else if (_value instanceof List) {
+            convertDicInfo((List) _value,ifOverturn,scope);
+            return true;
+        }
+        return false;
+    }
+
 
     /**
      * 翻译标签数据
@@ -303,7 +311,7 @@ public class DircConvertUtils {
     private static void convertDicColumnInfo4Map(Map<String, Object> result,boolean ifOverturn,String scope) {
         log.info("字典翻译工具类#当前结果集类型为Map");
         result.keySet().forEach(key -> {//查询结果集
-            if(recursion(result.get(key),ifOverturn)) return;
+            if(recursion(result.get(key),ifOverturn,scope)) return;
             //根据返回结果集去定位类型
             Map<String, String> FIELDNAME_FTYPE_MAP_TEMP = Scope_FIELDNAME_FTYPE_MAP.get(scope);
             String colType = FIELDNAME_FTYPE_MAP_TEMP.get(key);
@@ -330,7 +338,7 @@ public class DircConvertUtils {
      * 翻译实体类数据
      * @param result
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
-     * @param  scope 作用域
+     * @param scope 作用域
      */
     private static void convertDicColumnInfo(Object result,boolean ifOverturn,String scope) {
         log.info("字典翻译工具类#翻译实体类数据："+result);
@@ -341,13 +349,29 @@ public class DircConvertUtils {
         allFields.forEach(field -> {
             try {
                 //指定类名和字段名就能找到该字段的get方法
-                Object value = getObject(result, ifOverturn, field);
-                if (value == null) return;//翻译下一个
+                Method getMethod = getMethod(result.getClass(), field.getName());
+                //根据方法返回值判断是否需要递归进行翻译
+                Object value = null;
+                try{
+                    value = getMethod.invoke(result);
+                    if(recursion(value,ifOverturn,scope)) return;
+                }catch (RuntimeException e){
+                    log.error(field.getName()+"没有这个方法");
+                    return;//翻译下一个
+                }
 
                 //根据当前的实体属性名去map里面去查找
-                Map<String, String> FIELDNAME_FTYPE_MAP_TEMP = Scope_FIELDNAME_FTYPE_MAP.get(scope);
-                String colType = FIELDNAME_FTYPE_MAP_TEMP.get(field.getName());                //迭代实体类的所有字段判断是否有可翻译的类型
-                commonMethod4Entity(result, ifOverturn, field, value, colType);
+                String colType =FIELDNAME_FTYPE_MAP.get(field.getName()) ;//迭代实体类的所有字段判断是否有可翻译的类型
+                Map<String, Object> colTypeKV = null;//如果这个字段的类型存在就翻译
+                if(!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
+                if(ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
+                log.info("字典翻译工具类#当前翻译字段名为" + field.getName() + "字段名对应的类型名为" + colType + "类型对应的字典为：" + colTypeKV);
+                if (colTypeKV != null) {
+                    //获取实体类的set方法
+                    Method setMethod = setMethod(result.getClass(), field.getName(), String.class);
+                    //执行调用
+                    setMethod.invoke(result, colTypeKV.get(value));
+                }
             } catch (Exception ignored) {}
         });
     }
@@ -366,15 +390,32 @@ public class DircConvertUtils {
         allFields.forEach(field -> {
             try {
                 //指定类名和字段名就能找到该字段的get方法
-                Object value = getObject(result, ifOverturn, field);
-                if (value == null) return;//翻译下一个
-
+                Method getMethod = getMethod(result.getClass(), field.getName());
+                //根据方法返回值判断是否需要递归进行翻译
+                Object value = null;
+                try{
+                    value = getMethod.invoke(result);
+                    if(recursion(value,ifOverturn)) return;
+                }catch (RuntimeException e){
+                    log.error(field.getName()+"没有这个方法");
+                    return;//翻译下一个
+                }
                 //根据当前的实体属性名去map里面去查找
                 String colType =FIELDNAME_FTYPE_MAP.get(field.getName()) ;//迭代实体类的所有字段判断是否有可翻译的类型
-                commonMethod4Entity(result, ifOverturn, field, value, colType);
+                Map<String, Object> colTypeKV = null;//如果这个字段的类型存在就翻译
+                if(!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
+                if(ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
+                log.info("字典翻译工具类#当前翻译字段名为" + field.getName() + "字段名对应的类型名为" + colType + "类型对应的字典为：" + colTypeKV);
+                if (colTypeKV != null) {
+                    //获取实体类的set方法
+                    Method setMethod = setMethod(result.getClass(), field.getName(), String.class);
+                    //执行调用
+                    setMethod.invoke(result, colTypeKV.get(value));
+                }
             } catch (Exception ignored) {}
         });
     }
+
 
 
     //==================================================================================
@@ -436,35 +477,6 @@ public class DircConvertUtils {
         return null; //当前类型不是基本类型返回null
     }
 
-
-
-    private static void commonMethod4Entity(Object result, boolean ifOverturn, Field field, Object value, String colType) throws IllegalAccessException, InvocationTargetException {
-        Map<String, Object> colTypeKV = null;//如果这个字段的类型存在就翻译
-        if (!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
-        if (ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
-        log.info("字典翻译工具类#当前翻译字段名为" + field.getName() + "字段名对应的类型名为" + colType + "类型对应的字典为：" + colTypeKV);
-        if (colTypeKV != null) {
-            //获取实体类的set方法
-            Method setMethod = setMethod(result.getClass(), field.getName(), String.class);
-            //执行调用
-            setMethod.invoke(result, colTypeKV.get(value));
-        }
-    }
-
-    private static Object getObject(Object result, boolean ifOverturn, Field field) throws IllegalAccessException, InvocationTargetException {
-        Method getMethod = getMethod(result.getClass(), field.getName());
-        //根据方法返回值判断是否需要递归进行翻译
-        Object value = null;
-        try {
-            value = getMethod.invoke(result);
-            if (recursion(value, ifOverturn)) return null;
-        } catch (RuntimeException e) {
-            log.error(field.getName() + "没有这个方法");
-            return null;
-        }
-        return value;
-    }
-
     private static void commonMethod4Map(Map<String, Object> result, boolean ifOverturn, String key, String colType) {
         Map<String, Object> colTypeKV = null;
         if (colType != null) {//如果当前查询结果集中有需要翻译的类型就去翻译。
@@ -480,5 +492,17 @@ public class DircConvertUtils {
         }
     }
 
+    private static List<Map<String, Object>> selectDicInfoByType(String type) {
+        log.error("正在找"+type+"类型对应的kv..........");
+        List<Map<String, Object>> mapList = new ArrayList<>();
+        tbDircList.stream().filter(tbDirc -> tbDirc.getFType().equals(type))
+                .forEach(tbDirc -> {
+                    HashMap<String, Object> hashMapTemp = new HashMap<>();
+                    hashMapTemp.put(KEY_NAME,tbDirc.getFKey());
+                    hashMapTemp.put(VALUE_NAME, tbDirc.getFValue());
+                    mapList.add(hashMapTemp);
+                });
+        return mapList;
+    }
 
 }
