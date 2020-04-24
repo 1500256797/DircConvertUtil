@@ -1,5 +1,7 @@
 # DircConvertUtil
 字典翻译工具类，支持正向翻译，方向翻译，翻译map，翻译标签。
+目前只支持Mybatis.
+
 
 ## 一、添加依赖
 1、在 pom.xml中添加依赖：
