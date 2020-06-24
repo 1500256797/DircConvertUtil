@@ -7,10 +7,8 @@ import com.cesec.springboot.system.mapper.TbLabelFieldMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.yaml.snakeyaml.Yaml;
-
 import javax.annotation.PostConstruct;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,14 +16,6 @@ import java.util.stream.Collectors;
 
 /**
  * ClassName: DircConvertUtils
- * Description: 字典表翻译工具类:修改类型意味着修改代码，成员变量与类型映射不可能改，
- *           修改类型意味着字段名和类型的映射关系被破坏。-----需要修改代码
- *           修改key意味着原有数据发生错乱，就算原有没数据---只有同步问题
- *           修改value首先意味着原有数据发生错乱----同步问题
- *           新增类型----意味着需要修改代码，否则无意义。
- *           新增kv ----只有同步问题。
- *           修改数据库字段名---修改代码
- * 同步问题解决方案：定时刷新整个字典表+局部刷新
  * Author : zzq
  **/
 @Slf4j
@@ -35,61 +25,62 @@ public class DircConvertUtils {
     //字典表信息(反转)，主要用于将中文转成编码 例如：Map<10101, Map<"流动人口"，"01" >>
     private static final  Map<String, Map<String, Object>> DIC_INFO_OVERTURN = new ConcurrentHashMap<>();
     //实体成员变量名与数据表类型映射关系：Map<fieldName,f_Type>  例如：Map<"sex","10103">
-    private static final Map<String, String> FIELDNAME_FTYPE_MAP = new HashMap<>(16);
-
+    private static final  Map<String, String> FIELDNAME_FTYPE_MAP = new HashMap<>();
+    //域 字段 字典类型映射
+    private static final Map<String, Map<String, String>> SCOPE_FIELDNAME_FTYPE_MAP = new HashMap<>(60);
     //标签约束  实体成员变量名与数据表类型映射关系：Map<label_tree_id,Map<fieldName,f_Type>>
-    // 例如：Map<"8ebba76af8c64a85be9510c060e0ebe5",Map<"sex","10103">>
-    private static final Map<String, Map<String, String>> LabelCodeRowId_FieldName_Ftype_Map = new ConcurrentHashMap<>(60);
-
-    //基本数据约束
-    private static final Map<String, Map<String, String>> Scope_FIELDNAME_FTYPE_MAP = new ConcurrentHashMap<>(60);
+    //例如：Map<"8ebba76af8c64a85be9510c060e0ebe5",Map<"sex","10103">>
+    private static final Map<String, Map<String, String>> LABELROWID_FIELDNAME_FTYPE_MAP = new ConcurrentHashMap<>(60);
 
     //字典表 key字段名 value字段名
     private static final String KEY_NAME = "keyName";
     private static final String VALUE_NAME = "valueName";
-    //yaml name
+    //字段 字典类型映射文件
     private static final String YAML_NAME = "test.yml";
 
     private static  TbDircMapper tbDircMapper;
-
+    @Autowired
+    private  TbDircMapper autowiredTbDircMapper;
     private static TbLabelFieldMapper tbLabelFieldMapper;
     @Autowired
-    private  TbDircMapper tbDircMapper_temp;
-    @Autowired
-    private TbLabelFieldMapper tbLabelFieldMapper_temp;
-
+    private TbLabelFieldMapper autowiredTbLabelFieldMapper;
 
     private static  List<TbDirc> tbDircList ;
 
 
+    /**
+     * @Description 自定义初始化bean
+     * @param
+     * @return void
+     */
     @PostConstruct
     public  void init(){
-        tbDircMapper = tbDircMapper_temp;
-        tbLabelFieldMapper = tbLabelFieldMapper_temp;
-        tbDircList = tbDircMapper.selectAll(); //字典表全表扫描
+        tbDircMapper = autowiredTbDircMapper;
+        tbLabelFieldMapper = autowiredTbLabelFieldMapper;
+        tbDircList = tbDircMapper.selectAll(); //字典表全表扫描 like "1%"
+        //tbDircList = tbDircMapper.selectAll().stream().filter(tbDirc -> FIELDNAME_FTYPE_MAP.containsValue(tbDirc.getFType())).collect(Collectors.toList()); //字典表全表扫描
         if(tbDircList==null){
-            log.error("字典翻译工具类#请确定字典表中有无数据");
+            log.warn("字典翻译工具类#请确定字典表中有无数据");
             return;
         }
-        Set<String> allDircType = tbDircList.stream().map(TbDirc::getFType).collect(Collectors.toSet()); //获取字典类型set
-        if (allDircType==null) {
-            log.error("字典翻译工具类#请确定字典表中有无数据");
-            return;
-        }
+        Set<String> allDircType = tbDircList.stream().filter(item->item!=null&&null!=item.getFType()&&null!=item.getFKey()&&null!=item.getFValue()).map(TbDirc::getFType).collect(Collectors.toSet()); //获取字典类型set
         //根据字典类型组成相应kv
         allDircType.stream().filter(item->item!=null).forEach(item->{
-            //List<Map<String, Object>> l2 = tbDircMapper.selectDicInfoByType(item.toString());
             List<Map<String, Object>> l2 = selectDicInfoByType(item.toString());
             if(l2.isEmpty()){
-                log.error("字典翻译工具类#请确定DB中有无"+item.toString()+"类型的数据！"+l2.toString());
                 return;//同continue
             }
             DircConvertUtils.loadDircByColType(l2, item.toString());//初始化字典
-            DircConvertUtils.loadDicInfoByColTypeOverturn(l2, item.toString());//初始化反转字典
+            //DircConvertUtils.loadDicInfoByColTypeOverturn(l2, item.toString());//初始化反转字典
         });
     }
 
-    //刷新标签字段与字典类型映射
+
+    /**
+     * @Description 根据标签主键刷新标签字段与字典类型映射
+     * @param treeCodeRowId 标签主键
+     * @return void
+     */
     public static void freshLabel(String treeCodeRowId){
         //获取某个标签的所有字段信息
         List<TbLabelField> labelFieldDircCodes = tbLabelFieldMapper.selectByLabelTreeCodeRowId(treeCodeRowId);
@@ -99,29 +90,46 @@ public class DircConvertUtils {
             labelFieldDircCodeMap.put(item.getLabelField(), item.getDircCode());
         });
         //例如： <"8ebba76af8c64a85be9510c060e0ebe5",<crime_type,10217>>
-        LabelCodeRowId_FieldName_Ftype_Map.put(treeCodeRowId, labelFieldDircCodeMap);
-        //log.error("当前TbLabelFieldMap" + LabelCodeRowId_FieldName_Ftype_Map.toString());
+        LABELROWID_FIELDNAME_FTYPE_MAP.put(treeCodeRowId, labelFieldDircCodeMap);
+//      LabelRowId_FieldName_Ftype_Map.set();
     }
 
-    //刷新字典表
+
+    /**
+     * @Description 根据获取字典kv
+     * @param fType 字典类型
+     * @return java.util.Map<java.lang.String, java.lang.Object>
+     */
+    public static Map<String, Object> getDircByType(String fType){
+        return DIC_INFO.get(fType);
+    }
+
+    /**
+     * @Description 刷新字典表
+     * @param
+     * @return void
+     */
     public static void fresh(){
-        tbDircList = tbDircMapper.selectAll(); //字典表全表扫描
-        Set<String> allDircType = tbDircList.stream().map(TbDirc::getFType).collect(Collectors.toSet()); //获取字典类型set
+        tbDircList = tbDircMapper.selectAll();
+        //.stream().filter(tbDirc -> FIELDNAME_FTYPE_MAP.containsValue(tbDirc.getFType())).collect(Collectors.toList()); //字典表全表扫描
+        Set<String> allDircType = tbDircList.stream().filter(item->item!=null).map(TbDirc::getFType).collect(Collectors.toSet()); //获取字典类型set
         //根据字典类型组成相应kv
-        allDircType.stream().filter(item->item!=null).forEach(item->{
+        allDircType.stream().filter(item->item!=null&&FIELDNAME_FTYPE_MAP.containsValue(item)).forEach(item->{
             //List<Map<String, Object>> l2 = tbDircMapper.selectDicInfoByType(item.toString());
             List<Map<String, Object>> l2 = selectDicInfoByType(item.toString());
             if(l2.isEmpty()){
-                log.error("字典翻译工具类#请确定DB中有无"+item.toString()+"类型的数据！"+l2.toString());
+                //log.warn("字典翻译工具类#请确定DB中有无"+item.toString()+"类型的数据！"+l2.toString());
                 return;//同continue
             }
             DircConvertUtils.loadDircByColType(l2, item.toString());//初始化字典
-            DircConvertUtils.loadDicInfoByColTypeOverturn(l2, item.toString());//初始化反转字典
+            //DircConvertUtils.loadDicInfoByColTypeOverturn(l2, item.toString());//初始化反转字典
         });
     }
 
     /**
-     * 初始化工具类
+     * @Description 初始化工具类
+     * @param
+     * @return
      */
     public DircConvertUtils() {
         //实体成员变量名与数据表类型映射关系
@@ -133,20 +141,24 @@ public class DircConvertUtils {
         FIELDNAME_FTYPE_MAP.put("maritalStatus", "10104");//婚姻状况
         FIELDNAME_FTYPE_MAP.put("religion", "10107");//宗教信仰
         FIELDNAME_FTYPE_MAP.put("careerType", "10108");//职业类型
+        FIELDNAME_FTYPE_MAP.put("career_type", "10108");//职业类型
+        FIELDNAME_FTYPE_MAP.put("house_type", "10309");//房屋地址类型
+        FIELDNAME_FTYPE_MAP.put("houseType", "10309");//房屋地址类型
 
+        //从yml文件中加载字段 字典类型映射关系
         Yaml yaml = new Yaml();
         Map<String, Map<String, String>> mapMap =  (Map<String, Map<String,String>>) yaml.load(this
                 .getClass().getClassLoader().getResourceAsStream(YAML_NAME));
-        Scope_FIELDNAME_FTYPE_MAP.putAll(mapMap);
+        SCOPE_FIELDNAME_FTYPE_MAP.putAll(mapMap);
     }
 
-
-    /*
-     *  将某个类型ｋｖ方法字典表中
+    /**
+     * @Description 将某个类型ｋｖ方法字典表中
      * @param _dicInfo 从数据库查询的字典信息
      * @param colType 字典信息对应的字典类型
-     **/
-    private   static void loadDircByColType(List<Map<String, Object>> _dicInfo,String colType){
+     * @return void
+     */
+    private  static void loadDircByColType(List<Map<String, Object>> _dicInfo,String colType){
         Map<String, Object> colTypeKV = DIC_INFO.get(colType); // 获取以当前分类为键的map
         if (colTypeKV != null) {
             for (Map<String, Object> map : _dicInfo){
@@ -165,8 +177,10 @@ public class DircConvertUtils {
     }
 
     /**
-     * 初始化反转字典表
+     * @Description 初始化反转字典表
      * @param _dicInfo 字典表信息
+     * @param colType 字典类型
+     * @return void
      */
     private static void loadDicInfoByColTypeOverturn(List<Map<String, Object>> _dicInfo,String colType) {
         Map<String, Object> colTypeKV = DIC_INFO_OVERTURN.get(colType); // 获取以当前分类为键的map
@@ -186,20 +200,20 @@ public class DircConvertUtils {
         }
     }
 
-
     /**
-     * 翻译业务数据中的字典字段数据
+     * @Description 翻译业务数据中的字典字段数据
      * @param result 拦截器拦截的结果
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
      * @param scope 作用域
+     * @return void
      */
     public static void convertDicInfo(List<Object> result,boolean ifOverturn,String scope) {
         if(DIC_INFO.isEmpty()){
-            log.error("字典翻译工具类#当前字典信息为空！无法翻译！");
+            log.warn("字典翻译工具类#当前字典信息为空！无法翻译！");
             return;
         }
-        if(!Scope_FIELDNAME_FTYPE_MAP.containsKey(scope)){
-            log.error("scope 不存在！");
+        if(!SCOPE_FIELDNAME_FTYPE_MAP.containsKey(scope)){
+            log.warn("scope 不存在！");
             return;
         }
         for (Object res : result) {
@@ -209,20 +223,21 @@ public class DircConvertUtils {
             } else if (isBaseType(res.getClass().getTypeName()) == null) { //非基本类型
                 DircConvertUtils.convertDicColumnInfo(res,ifOverturn,scope);
             } else {
-                log.error("当前结果集类型为基本类型 不翻译！");
+                log.warn("当前结果集类型为基本类型 不翻译！");
                 continue;//
             }
         }
     }
 
     /**
-     * 翻译业务数据中的字典字段数据
+     * @Description 翻译业务数据中的字典字段数据
      * @param result 拦截器拦截的结果集
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
+     * @return void
      */
     public static void convertDicInfo(List<Object> result,boolean ifOverturn) {
         if(DIC_INFO.isEmpty()){
-            log.error("字典翻译工具类#当前字典信息为空！无法翻译！");
+            log.warn("字典翻译工具类#当前字典信息为空！无法翻译！");
             return;
         }
         for (Object res : result) {
@@ -232,17 +247,16 @@ public class DircConvertUtils {
             } else if (isBaseType(res.getClass().getTypeName()) == null) { //非基本类型
                 DircConvertUtils.convertDicColumnInfo(res,ifOverturn);
             } else {
-                log.error("当前结果集类型为基本类型 不翻译！");
-                continue;//
+                log.warn("当前结果集类型为基本类型 不翻译！");
+                continue;
             }
         }
     }
-
     /**
-     * 递归翻译
+     * @Description 递归翻译
      * @param _value 当前数据中的子集
-     * @return 是否发生递归动作
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
+     * @return boolean
      */
     private static boolean recursion(Object _value,boolean ifOverturn) {
         if (_value == null) return true;
@@ -255,12 +269,13 @@ public class DircConvertUtils {
         }
         return false;
     }
+
     /**
-     * 递归翻译
+     * @Description 递归翻译
      * @param _value 当前数据中的子集
-     * @return 是否发生递归动作
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
-     * @param scope 是否添加域
+     * @param scope  域
+     * @return boolean
      */
     private static boolean recursion(Object _value,boolean ifOverturn,String scope) {
         if (_value == null) return true;
@@ -276,53 +291,60 @@ public class DircConvertUtils {
 
 
     /**
-     * 翻译标签数据
-     * @param result
+     * @Description 翻译标签数据
      * @param labelTreeCode
+     * @param result
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
+     * @return void
      */
     public  static void convertLabelMap(String labelTreeCode , Map<String, Object> result,boolean ifOverturn) {
-        log.info("字典翻译工具类#当前正在翻译标签" + result.toString());
-        result.keySet().forEach(key -> {//查询结果集
-            if(recursion(result.get(key),ifOverturn)) return;
-            Map<String,String > labelFieldDircCodeMap = LabelCodeRowId_FieldName_Ftype_Map.get(labelTreeCode);//像根据标签id拿到map
-            String colType = labelFieldDircCodeMap.get(key);//再根据结果集中的key 找到类型
-            Map<String, Object> colTypeKV = null; //有了类型，找到字典类型
-            if(colType!=null){//如果当前查询结果集中有需要翻译的类型就去翻译。
-                if(!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
-                if(ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
-                if (colTypeKV != null) {//拿到类型字典的kv
-                    String biz_value = result.get(key).toString(); //拿到结果集的value
-                    result.put(key, colTypeKV.get(biz_value)); //设置新的value
+
+        for (String key : result.keySet()) {
+                if(recursion(result.get(key),ifOverturn)) continue;
+                Map<String,String > labelFieldDircCodeMap = LABELROWID_FIELDNAME_FTYPE_MAP.get(labelTreeCode);//像根据标签id拿到map
+                String colType = labelFieldDircCodeMap.get(key);//再根据结果集中的key 找到类型
+                Map<String, Object> colTypeKV = null; //有了类型，找到字典类型
+                if(colType!=null){//如果当前查询结果集中有需要翻译的类型就去翻译。
+                    colType = colType.replace("\r\n", "");
+                    if(!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
+                    if(ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
+                    if (colTypeKV != null) {//拿到类型字典的kv
+                        String biz_value = result.get(key).toString(); //拿到结果集的value
+                        result.put(key, colTypeKV.get(biz_value)); //设置新的value
+                    }
+                }else{
+                    log.warn("字典翻译工具类#当前标签Map中的[{}]不能被翻译",key);
+                    continue;
                 }
-            }else{
-                log.warn("字典翻译工具类#当前标签Map中的"+key+"不能被翻译");
-                return;
-            }
-        });
+        }
+
     }
 
+
     /**
-     * 翻译map类数据
+     * @Description 翻译map类数据
      * @param result
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
      * @param scope 作用域
+     * @return void
      */
     private static void convertDicColumnInfo4Map(Map<String, Object> result,boolean ifOverturn,String scope) {
         log.info("字典翻译工具类#当前结果集类型为Map");
         result.keySet().forEach(key -> {//查询结果集
             if(recursion(result.get(key),ifOverturn,scope)) return;
             //根据返回结果集去定位类型
-            Map<String, String> FIELDNAME_FTYPE_MAP_TEMP = Scope_FIELDNAME_FTYPE_MAP.get(scope);
+            Map<String, String> FIELDNAME_FTYPE_MAP_TEMP = SCOPE_FIELDNAME_FTYPE_MAP.get(scope);
             String colType = FIELDNAME_FTYPE_MAP_TEMP.get(key);
             commonMethod4Map(result, ifOverturn, key, colType);
         });
     }
 
+
     /**
-     * 翻译map类数据
+     * @Description 翻译map类数据
      * @param result
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
+     * @return void
      */
     private static void convertDicColumnInfo4Map(Map<String, Object> result,boolean ifOverturn) {
         log.info("字典翻译工具类#当前结果集类型为Map");
@@ -334,14 +356,15 @@ public class DircConvertUtils {
         });
     }
 
+
     /**
-     * 翻译实体类数据
+     * @Description 翻译实体类数据
      * @param result
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
      * @param scope 作用域
+     * @return void
      */
     private static void convertDicColumnInfo(Object result,boolean ifOverturn,String scope) {
-        log.info("字典翻译工具类#翻译实体类数据："+result);
         List<Field> allFields = Arrays.asList(result.getClass().getDeclaredFields());
         if(allFields.size()==0){
             return;
@@ -356,7 +379,6 @@ public class DircConvertUtils {
                     value = getMethod.invoke(result);
                     if(recursion(value,ifOverturn,scope)) return;
                 }catch (RuntimeException e){
-                    log.error(field.getName()+"没有这个方法");
                     return;//翻译下一个
                 }
 
@@ -365,24 +387,28 @@ public class DircConvertUtils {
                 Map<String, Object> colTypeKV = null;//如果这个字段的类型存在就翻译
                 if(!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
                 if(ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
-                log.info("字典翻译工具类#当前翻译字段名为" + field.getName() + "字段名对应的类型名为" + colType + "类型对应的字典为：" + colTypeKV);
+                //log.info("字典翻译工具类#当前翻译字段名为" + field.getName() + "字段名对应的类型名为" + colType + "类型对应的字典为：" + colTypeKV);
                 if (colTypeKV != null) {
                     //获取实体类的set方法
                     Method setMethod = setMethod(result.getClass(), field.getName(), String.class);
                     //执行调用
                     setMethod.invoke(result, colTypeKV.get(value));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         });
     }
 
+
     /**
-     * 翻译实体类数据
+     * @Description 翻译实体类数据
      * @param result
      * @param ifOverturn 是否使用反转字典？ true：中文翻译成编码  false：编码转成中文
+     * @return void
      */
     private static void convertDicColumnInfo(Object result,boolean ifOverturn) {
-        log.info("字典翻译工具类#翻译实体类数据："+result);
+        log.info("字典翻译工具类#翻译实体类数据：[{}]",result);
         List<Field> allFields = Arrays.asList(result.getClass().getDeclaredFields());
         if(allFields.size()==0){
             return;
@@ -397,7 +423,7 @@ public class DircConvertUtils {
                     value = getMethod.invoke(result);
                     if(recursion(value,ifOverturn)) return;
                 }catch (RuntimeException e){
-                    log.error(field.getName()+"没有这个方法");
+                    log.warn("[{}]没有这个方法",field.getName());
                     return;//翻译下一个
                 }
                 //根据当前的实体属性名去map里面去查找
@@ -405,7 +431,7 @@ public class DircConvertUtils {
                 Map<String, Object> colTypeKV = null;//如果这个字段的类型存在就翻译
                 if(!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
                 if(ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
-                log.info("字典翻译工具类#当前翻译字段名为" + field.getName() + "字段名对应的类型名为" + colType + "类型对应的字典为：" + colTypeKV);
+                //log.info("字典翻译工具类#当前翻译字段名为" + field.getName() + "字段名对应的类型名为" + colType + "类型对应的字典为：" + colTypeKV);
                 if (colTypeKV != null) {
                     //获取实体类的set方法
                     Method setMethod = setMethod(result.getClass(), field.getName(), String.class);
@@ -422,28 +448,42 @@ public class DircConvertUtils {
     //==============================================通用方法============================
     //==================================================================================
 
-    //使用反射获取某个class的所有字段
+
+    /**
+     * @Description 使用反射获取某个class的所有字段
+     * @param className
+     * @return java.util.List<java.lang.reflect.Field>
+     */
     private static  List<Field> getAllFields(Class<?> className) {
         return Arrays.asList(className.getFields());
     }
 
-    //使用反射获取某个class的get方法
+    /**
+     * @Description 使用反射获取某个class的get方法
+     * @param className
+     * @param fieldName
+     * @return java.lang.reflect.Method
+     */
     private static  Method getMethod(Class<?> className,String fieldName) {
         try {
             //获取get方法前，先进行字符串拼接
-            String methodName = "get" + captureName(fieldName);
-            Method method = className.getMethod(methodName);
+            StringBuilder methodName = new StringBuilder("get");
+            methodName.append(captureName(fieldName));
+            Method method = className.getMethod(methodName.toString());
             return method;
         } catch (NoSuchMethodException e) {
-            e.printStackTrace();
+            log.warn("无此方法");
             return null;
         }
     }
 
-    //首字母转大写
+    /**
+     * @Description 首字母转大写
+     * @param name
+     * @return java.lang.String
+     */
     private static String captureName(String name) {
         char[] cs=name.toCharArray();
-
         if(cs[0]>=65&&cs[0]<=90){
             //如果本来就是大写字母即刻返回
             return String.valueOf(cs);
@@ -453,12 +493,19 @@ public class DircConvertUtils {
         return String.valueOf(cs);
     }
 
-    //使用反射获取某个class的set方法
+    /**
+     * @Description 使用反射获取某个class的set方法
+     * @param className
+     * @param fieldName
+     * @param paraType
+     * @return java.lang.reflect.Method
+     */
     private static  Method setMethod(Class<?> className,String fieldName,Class paraType) {
         try {
             //首字母大写后进行字符串拼接 setPopuType(String popuType)
-            String getMethodName = "set"+captureName(fieldName);
-            Method setMethod  = className.getMethod(getMethodName, paraType);
+            StringBuilder getMethodName = new StringBuilder("set");
+            getMethodName.append(captureName(fieldName));
+            Method setMethod  = className.getMethod(getMethodName.toString(), paraType);
             return setMethod;
         } catch (NoSuchMethodException e) {
             e.printStackTrace();
@@ -466,6 +513,12 @@ public class DircConvertUtils {
         }
     }
 
+
+    /**
+     * @Description 判断字段类型是否为基本数据类型
+     * @param typeName
+     * @return java.lang.Class<?>
+     */
     private static Class<?> isBaseType(String typeName) {
         final Object[][] baseTypes = {{"byte", byte.class}, {"short", short.class}, {"char", char.class}, {"int", int.class}, {"java.lang.Long", long.class},{"Long", Long.class}, {"float", float.class}, {"double", double.class}, {"boolean", boolean.class}};
         for (int i = 0; i < baseTypes.length; i = i + 1) {
@@ -483,17 +536,21 @@ public class DircConvertUtils {
             if (!ifOverturn) colTypeKV = DIC_INFO.get(colType);//如果ifOverTurn为false,则不使用反转
             if (ifOverturn) colTypeKV = DIC_INFO_OVERTURN.get(colType);
             if (colTypeKV != null) {
-                String biz_value = result.get(key) + "";
+                Object biz_value = result.get(key);
                 result.put(key, colTypeKV.get(biz_value));
             }
         } else {
-            log.info("字典翻译工具类#当前map中的" + key.toString() + "_key不能被翻译");
+            log.info("字典翻译工具类#当前map中的 [{}]不能被翻译",key);
             return;
         }
     }
 
+    /**
+     * @Description 根据字典类型查询字典详情
+     * @param type 字典类型
+     * @return java.util.List<java.util.Map < java.lang.String, java.lang.Object>>
+     */
     private static List<Map<String, Object>> selectDicInfoByType(String type) {
-        log.error("正在找"+type+"类型对应的kv..........");
         List<Map<String, Object>> mapList = new ArrayList<>();
         tbDircList.stream().filter(tbDirc -> tbDirc.getFType().equals(type))
                 .forEach(tbDirc -> {
@@ -504,5 +561,4 @@ public class DircConvertUtils {
                 });
         return mapList;
     }
-
 }

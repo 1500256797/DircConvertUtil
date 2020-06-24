@@ -7,8 +7,6 @@ import org.springframework.context.annotation.Configuration;
  * ClassName: MetaObjectConfig
  * Description: 字典翻译工具类配置文件
  * Author : zzq
- * Date : 2020/3/31 18:47
- * Version : 1.1
  **/
 
 @Configuration

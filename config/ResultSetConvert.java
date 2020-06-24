@@ -13,8 +13,6 @@ import java.util.Properties;
  * ClassName: ResultSetConvert
  * Description: 自定义查询结果集拦截器
  * Author : zzq
- * Date : 2020/3/25 16:08
- * Version : 1.1
  **/
 @Slf4j
 @Intercepts({@Signature(type = ResultSetHandler.class, method = "handleResultSets", args = {Statement.class})})
@@ -30,7 +28,7 @@ public class ResultSetConvert implements Interceptor {
     private static ThreadLocal<Boolean> freshStatus = new ThreadLocal<>();
 
     /**
-     * 是否刷新开关
+     * 是否刷新标签开关
      */
     private static ThreadLocal<Boolean> freshLabelStatus = new ThreadLocal<>();
 
@@ -56,7 +54,7 @@ public class ResultSetConvert implements Interceptor {
             for (StackTraceElement stackTraceElement : stackTrace) {
                 if(stackTraceElement.getMethodName().contains(methodSuffix)) return result;
             }
-            log.info("准备翻译拦截到的结果集："+result);
+            //log.info("准备翻译拦截到的结果集："+result);
             if(convertScope.get()!=null){
                 DircConvertUtils.convertDicInfo(result,false,convertScope.get());
             }else{
@@ -65,10 +63,10 @@ public class ResultSetConvert implements Interceptor {
             //翻译一次减掉一次
             if(convertCount.get()!=null){
                 Integer count = convertCount.get()-1;
-                log.info("翻译次数减1，剩余次数"+"剩余翻译次数："+count);
+                //log.info("翻译次数减1，剩余次数"+"剩余翻译次数："+count);
                 convertCount.set(count);
                 if(count<=0){
-                    log.warn("当前无剩余翻译次数："+convertCount.get());
+                    //log.warn("当前无剩余翻译次数："+convertCount.get());
                     close();
                 }
             }else {
@@ -83,6 +81,9 @@ public class ResultSetConvert implements Interceptor {
     private static void close(){
         convertStatus.remove();
         freshStatus.remove();
+        freshLabelStatus.remove();
+        convertCount.remove();
+        convertScope.remove();
     }
 
     /**
@@ -101,7 +102,13 @@ public class ResultSetConvert implements Interceptor {
         freshStatus.set(false);
         convertStatus.set(true);
     }
-
+    /**
+     * 设置翻译次数
+     */
+    public static void onNoFresh( Integer times){
+        convertStatus.set(true);
+        convertCount.set(times);
+    }
     /**
      * 设置翻译次数
      */
@@ -159,10 +166,11 @@ public class ResultSetConvert implements Interceptor {
         //是否刷新标签字典
         if (freshLabelStatus.get() != null && freshLabelStatus.get()) {
             DircConvertUtils.freshLabel(treeCode);//先刷新标签表映射关系
-            DircConvertUtils.fresh();//再检查字典有无更新
+            //DircConvertUtils.fresh();//再检查字典有无更新
         }
         //convertStatus.set(true);
     }
+
 
     @Override
     public Object plugin(Object o) {
