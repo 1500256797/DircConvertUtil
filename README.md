@@ -55,8 +55,6 @@ private static final String YAML_NAME = "test.yml";
 
 3、在test.yml中添加自己的域
 添加自己的域，添加待翻译的字段名和对应的字典类型。
-
-![image](https://github.com/1500256797/images/20200424135632.png)
 ```
 zzq: # 这是域
   popu_type: "10101"
@@ -82,9 +80,8 @@ jack: # 这是域
     }
 ```
 
-## 4、更多
-待完善。。。
-
+## 4、设计与实现
+https://blog.csdn.net/weixin_36571185/article/details/106947004
 
 ## 5、特别鸣谢
 1、ゝLibra `
